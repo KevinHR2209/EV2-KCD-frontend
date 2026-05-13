@@ -1,10 +1,9 @@
 name: CI/CD - Frontend Despacho
 
-# Se activa solo con push a la rama deploy
 on:
   push:
     branches:
-      - deploy
+      - main
 
 jobs:
   build-and-deploy:
@@ -12,52 +11,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout del codigo
       - name: Checkout codigo
         uses: actions/checkout@v4
 
-      # 2. Configurar credenciales AWS
-      - name: Configurar AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Login a Docker Hub
+        uses: docker/login-action@v3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 3. Login a Amazon ECR
-      - name: Login a Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build y Push imagen a Docker Hub
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/ev2-kcd-frontend:latest
+          build-args: |
+            VITE_API_DESPACHO=${{ secrets.VITE_API_DESPACHO }}
+            VITE_API_VENTAS=${{ secrets.VITE_API_VENTAS }}
 
-      # 4. Build y Push de la imagen Docker
-      - name: Build, tag y push imagen a ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPO_FRONTEND }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build \
-            --build-arg VITE_API_DESPACHO=${{ secrets.VITE_API_DESPACHO }} \
-            --build-arg VITE_API_VENTAS=${{ secrets.VITE_API_VENTAS }} \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-
-      # 5. Deploy en EC2 via SSH
-      - name: Deploy en EC2
+      - name: Deploy en EC2 via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST_FRONTEND }}
+          host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
-            docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO_FRONTEND }}:latest
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/ev2-kcd-frontend:latest
             docker stop frontend || true
             docker rm frontend || true
             docker run -d \
               --name frontend \
               --restart unless-stopped \
               -p 80:80 \
-              ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO_FRONTEND }}:latest
+              ${{ secrets.DOCKERHUB_USERNAME }}/ev2-kcd-frontend:latest
